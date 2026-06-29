@@ -121,12 +121,21 @@ func (m Model) View() string {
 	}
 
 	var s strings.Builder
-	s.WriteString(speedStyle.Render(fmt.Sprintf("%.1f", m.speed)))
-	s.WriteString(unitStyle.Render(" Mbps"))
-	s.WriteString("  ")
+	// Cap each readout at 999.9 and switch to Gbps beyond that, keeping a fixed
+	// width so the unit, sparkline, and peak never shift horizontally.
+	speed, unit := scale(m.speed)
+	s.WriteString(speedStyle.Render(fmt.Sprintf("%5.1f", speed)))
+	s.WriteString(unitStyle.Render(" " + unit))
+	s.WriteString(" ")
 	s.WriteString(sparkStyle.Render(sparkline(m.speeds, sparkWidth)))
 	if m.peak > 0 {
-		s.WriteString(peakStyle.Render(fmt.Sprintf("  peak %.0f", m.peak)))
+		peak, peakUnit := scale(m.peak)
+		label := fmt.Sprintf("  peak %.0f", peak)
+		// Only label the peak's unit when it differs from the live reading's.
+		if peakUnit != unit {
+			label += " " + peakUnit
+		}
+		s.WriteString(peakStyle.Render(label))
 	}
 
 	style := baseStyle
@@ -143,6 +152,15 @@ func mbps(bytes int64, d time.Duration) float64 {
 		return 0
 	}
 	return float64(bytes) * 8 / d.Seconds() / 1e6
+}
+
+// scale converts a speed in Mbps to its display magnitude and unit, switching to
+// Gbps once it would read past 999.9 Mbps so the value never exceeds "999.9".
+func scale(speed float64) (float64, string) {
+	if speed >= 999.95 {
+		return speed / 1000, "Gbps"
+	}
+	return speed, "Mbps"
 }
 
 func main() {

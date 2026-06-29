@@ -18,7 +18,7 @@ Set TypingSpeed 120ms
 
 # Clean, minimal prompt
 Hide
-Type "export PS1='> '"
+Type "export PS1='\[\e[38;2;99;102;241m\]> \[\e[0m\]'"
 Enter
 Type "clear"
 Enter
