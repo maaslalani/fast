@@ -56,7 +56,7 @@ func Run(args []string, stdout io.Writer) error {
 		if opts.json {
 			return json.NewEncoder(stdout).Encode(result)
 		}
-		return printResult(stdout, result)
+		return printResult(stdout, result, opts)
 	}
 
 	_, err = tea.NewProgram(newModel(test, opts)).Run()
