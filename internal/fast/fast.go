@@ -27,8 +27,20 @@ type target struct {
 }
 
 type location struct {
-	City    string `json:"city"`
-	Country string `json:"country"`
+	City    string `json:"city,omitempty"`
+	Country string `json:"country,omitempty"`
+}
+
+type clientInfo struct {
+	IP       string   `json:"ip,omitempty"`
+	ASN      any      `json:"asn,omitempty"`
+	ISP      string   `json:"isp,omitempty"`
+	Location location `json:"location,omitempty"`
+}
+
+type testConfig struct {
+	Targets []target   `json:"targets"`
+	Client  clientInfo `json:"client"`
 }
 
 var (
@@ -80,31 +92,32 @@ func fetchToken() (string, error) {
 	return string(match[1]), nil
 }
 
-// targets asks fast.com for count URLs to download from. fast.com is powered by
+// speedtestConfig asks fast.com for count test URLs. fast.com is powered by
 // Netflix, so these point at the Netflix Open Connect servers nearest to us.
-func targets(count int, token string, preference ipPreference) ([]target, error) {
+func speedtestConfig(count int, token string, preference ipPreference) (testConfig, error) {
 	if token == "" {
 		var err error
 		token, err = fetchToken()
 		if err != nil {
-			return nil, err
+			return testConfig{}, err
 		}
 	}
 
 	url := fmt.Sprintf("https://api.fast.com/netflix/speedtest/v2?https=true&token=%s&urlCount=%d", token, count)
 	body, err := getPreferred(url, preference)
 	if err != nil {
-		return nil, err
+		return testConfig{}, err
 	}
 
-	var response struct {
-		Targets []target `json:"targets"`
-	}
+	var response testConfig
 	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, err
+		return testConfig{}, err
+	}
+	if len(response.Targets) == 0 {
+		return testConfig{}, fmt.Errorf("no speed test targets")
 	}
 
-	return response.Targets, nil
+	return response, nil
 }
 
 // download repeatedly downloads from url until the context is cancelled, adding
@@ -246,6 +259,48 @@ func targetLabel(targets []target) string {
 		return fmt.Sprintf("%s (%s)", name, location)
 	}
 	return name
+}
+
+func (c clientInfo) Label() string {
+	details := []string{}
+	if c.ISP != "" {
+		details = append(details, c.ISP)
+	}
+	if asn := c.ASNString(); asn != "" {
+		details = append(details, asn)
+	}
+	if location := c.Location.String(); location != "" {
+		details = append(details, location)
+	}
+
+	if c.IP == "" {
+		return strings.Join(details, ", ")
+	}
+	if len(details) == 0 {
+		return c.IP
+	}
+	return fmt.Sprintf("%s (%s)", c.IP, strings.Join(details, ", "))
+}
+
+func (c clientInfo) ASNString() string {
+	var asn string
+	switch value := c.ASN.(type) {
+	case nil:
+		return ""
+	case string:
+		asn = value
+	case float64:
+		asn = fmt.Sprintf("%.0f", value)
+	default:
+		asn = fmt.Sprint(value)
+	}
+	if asn == "" || strings.EqualFold(asn, "null") {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToUpper(asn), "AS") {
+		return asn
+	}
+	return "AS" + asn
 }
 
 func (l location) String() string {
