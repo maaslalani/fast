@@ -14,7 +14,9 @@ Usage:
   fast [flags]
 
 Flags:
+  -d, --down          Measure download speed
   -h, --help          Show help
+  -u, --up            Measure upload speed
       --ipv4          Prefer IPv4 targets
       --ipv6          Prefer IPv6 targets
       --token token   Use an explicit fast.com API token
@@ -27,6 +29,8 @@ type options struct {
 	token        string
 	ipPreference ipPreference
 	ipSet        bool
+	down         bool
+	up           bool
 }
 
 func Run(args []string, stdout io.Writer) error {
@@ -44,7 +48,7 @@ func Run(args []string, stdout io.Writer) error {
 		return err
 	}
 
-	_, err = tea.NewProgram(newModel(testTargets)).Run()
+	_, err = tea.NewProgram(newModel(testTargets, opts)).Run()
 	return err
 }
 
@@ -53,8 +57,12 @@ func parseArgs(args []string) (options, bool, error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch arg {
+		case "-d", "--down":
+			opts.down = true
 		case "-h", "--help":
 			return opts, true, nil
+		case "-u", "--up":
+			opts.up = true
 		case "--ipv4":
 			if opts.ipSet && opts.ipPreference != preferIPv4 {
 				return opts, false, fmt.Errorf("--ipv4 and --ipv6 cannot be used together\n\n%s", help)
@@ -83,6 +91,10 @@ func parseArgs(args []string) (options, bool, error) {
 			}
 			return opts, false, fmt.Errorf("unknown argument %q\n\n%s", arg, help)
 		}
+	}
+	if !opts.down && !opts.up {
+		opts.down = true
+		opts.up = true
 	}
 	return opts, false, nil
 }

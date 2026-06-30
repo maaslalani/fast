@@ -79,12 +79,14 @@ type model struct {
 
 	latency time.Duration
 	server  string
+	down    bool
+	up      bool
 
 	done     bool
 	quitting bool
 }
 
-func newModel(targets []target) model {
+func newModel(targets []target, opts options) model {
 	ctx, cancel := context.WithCancel(context.Background())
 	start := time.Now()
 
@@ -99,6 +101,8 @@ func newModel(targets []target) model {
 		last:        speedSample{time: start},
 		uploadLast:  speedSample{time: start},
 		server:      targetLabel(targets),
+		down:        opts.down,
+		up:          opts.up,
 	}
 }
 
@@ -146,10 +150,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.latency = msg.latency
 		}
 		now := time.Now()
-		m.phase = phaseDownload
+		if m.down {
+			m.phase = phaseDownload
+			m.phaseStart = now
+			m.last = speedSample{time: now}
+			return m, m.startDownload
+		}
+		m.phase = phaseUpload
 		m.phaseStart = now
-		m.last = speedSample{time: now}
-		return m, m.startDownload
+		m.uploadLast = speedSample{time: now}
+		return m, m.startUpload
 
 	case tickMsg:
 		now := time.Now()
@@ -172,6 +182,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if now.Sub(m.phaseStart) >= duration {
+				if !m.up {
+					m.phase = phaseDone
+					m.done = true
+					m.cancel()
+					return m, tea.Quit
+				}
 				m.phase = phaseUpload
 				m.phaseStart = now
 				m.uploadLast = speedSample{time: now}
@@ -219,9 +235,15 @@ func (m model) View() string {
 	}
 	s.WriteString("\n")
 
-	s.WriteString(speedLine("down", m.speed, m.speeds, m.peak, true))
-	s.WriteString("\n")
-	s.WriteString(speedLine("up", m.uploadSpeed, m.uploadSpeeds, m.uploadPeak, m.phase == phaseUpload || m.phase == phaseDone))
+	if m.down {
+		s.WriteString(speedLine("down", m.speed, m.speeds, m.peak, true))
+	}
+	if m.down && m.up {
+		s.WriteString("\n")
+	}
+	if m.up {
+		s.WriteString(speedLine("up", m.uploadSpeed, m.uploadSpeeds, m.uploadPeak, m.phase == phaseUpload || m.phase == phaseDone))
+	}
 
 	s.WriteString("\n")
 	s.WriteString(metaStyle.Render("server " + m.server))
