@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	if err := fast.Run(); err != nil {
+	if err := fast.Run(os.Args[1:], os.Stdout); err != nil {
 		var netErr net.Error
 		if errors.As(err, &netErr) {
 			fmt.Fprintln(os.Stderr, "No internet connection.")
