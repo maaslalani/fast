@@ -5,46 +5,71 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"regexp"
+	"strings"
 	"sync/atomic"
+	"time"
 )
 
-// fallbackToken is used when we can't extract a fresh token from the fast.com
-// JavaScript bundle. It rarely changes, so this is usually good enough.
-const fallbackToken = "YXNkZmFzZGxmbnNkYWZoYXNkZmhrYWxm"
+const downloadPayloadBytes = 25 * 1024 * 1024
 
 var (
 	scriptExpr = regexp.MustCompile(`app-[a-z0-9]+\.js`)
 	tokenExpr  = regexp.MustCompile(`token:"(\w+)"`)
+	ipv4Client = &http.Client{Transport: ipv4Transport()}
 )
+
+func ipv4Transport() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		return dialer.DialContext(ctx, "tcp4", address)
+	}
+	return transport
+}
 
 // token extracts the API token from the fast.com JavaScript bundle. fast.com
 // embeds it in a script tag, so we fetch the page, find the script and pull the
 // token out of it.
-func token() string {
+func token() (string, error) {
 	page, err := get("https://fast.com/")
 	if err != nil {
-		return fallbackToken
+		return "", err
 	}
 
-	script, err := get("https://fast.com/" + scriptExpr.FindString(string(page)))
+	scriptName := scriptExpr.FindString(string(page))
+	if scriptName == "" {
+		return "", fmt.Errorf("could not find fast.com script")
+	}
+
+	script, err := get("https://fast.com/" + scriptName)
 	if err != nil {
-		return fallbackToken
+		return "", err
 	}
 
 	match := tokenExpr.FindSubmatch(script)
 	if len(match) < 2 {
-		return fallbackToken
+		return "", fmt.Errorf("could not find fast.com token")
 	}
-	return string(match[1])
+	return string(match[1]), nil
 }
 
 // targets asks fast.com for count URLs to download from. fast.com is powered by
 // Netflix, so these point at the Netflix Open Connect servers nearest to us.
 func targets(count int) ([]string, error) {
-	url := fmt.Sprintf("https://api.fast.com/netflix/speedtest/v2?https=true&token=%s&urlCount=%d", token(), count)
-	body, err := get(url)
+	token, err := token()
+	if err != nil {
+		return nil, err
+	}
+
+	url := fmt.Sprintf("https://api.fast.com/netflix/speedtest/v2?https=true&token=%s&urlCount=%d", token, count)
+	body, err := getIPv4(url)
+	if err != nil {
+		body, err = get(url)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -69,20 +94,37 @@ func targets(count int) ([]string, error) {
 // the number of bytes it reads to total as it goes. We run a few of these in
 // parallel to saturate the connection.
 func download(ctx context.Context, url string, total *atomic.Int64) {
+	url = downloadURL(url)
+
 	for ctx.Err() == nil {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return
 		}
+		req.Header.Set("Accept-Encoding", "identity")
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
+			return
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			resp.Body.Close()
 			return
 		}
 
 		io.Copy(counter{total}, resp.Body)
 		resp.Body.Close()
 	}
+}
+
+func downloadURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || !strings.HasSuffix(u.Path, "/speedtest") {
+		return raw
+	}
+
+	u.Path = strings.TrimSuffix(u.Path, "/speedtest") + fmt.Sprintf("/speedtest/range/0-%d", downloadPayloadBytes-1)
+	return u.String()
 }
 
 // counter is an io.Writer that keeps a running total of how many bytes have
@@ -98,7 +140,15 @@ func (c counter) Write(p []byte) (int, error) {
 
 // get performs an HTTP GET request and returns the response body.
 func get(url string) ([]byte, error) {
-	resp, err := http.Get(url)
+	return getWithClient(http.DefaultClient, url)
+}
+
+func getIPv4(url string) ([]byte, error) {
+	return getWithClient(ipv4Client, url)
+}
+
+func getWithClient(client *http.Client, url string) ([]byte, error) {
+	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err
 	}

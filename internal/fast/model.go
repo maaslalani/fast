@@ -13,8 +13,8 @@ import (
 
 const (
 	// connections is the number of parallel downloads we use to saturate the
-	// connection, the same as fast.com.
-	connections = 5
+	// connection. fast.com uses up to eight parallel downloads.
+	connections = 8
 
 	// duration is how long we measure the connection speed for.
 	duration = 10 * time.Second
@@ -47,10 +47,12 @@ type model struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	start  time.Time
-	speed  float64
-	speeds []float64
-	peak   float64
+	start   time.Time
+	last    speedSample
+	speed   float64
+	samples []speedSample
+	speeds  []float64
+	peak    float64
 
 	done     bool
 	quitting bool
@@ -58,13 +60,15 @@ type model struct {
 
 func newModel(targets []string) model {
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
+	start := time.Now()
 
 	return model{
 		targets: targets,
 		bytes:   &atomic.Int64{},
 		ctx:     ctx,
 		cancel:  cancel,
-		start:   time.Now(),
+		start:   start,
+		last:    speedSample{time: start},
 	}
 }
 
@@ -91,13 +95,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tickMsg:
-		elapsed := time.Since(m.start)
-		m.speed = mbps(m.bytes.Load(), elapsed)
+		now := time.Now()
+		total := m.bytes.Load()
+		m.samples = append(m.samples, speedSample{
+			bytes:    total - m.last.bytes,
+			duration: now.Sub(m.last.time),
+			time:     now,
+		})
+		m.last = speedSample{bytes: total, time: now}
+		m.speed = movingMbps(m.samples, time.Second)
 		m.speeds = append(m.speeds, m.speed)
 		if m.speed > m.peak {
 			m.peak = m.speed
 		}
 
+		elapsed := now.Sub(m.start)
 		if elapsed >= duration {
 			m.done = true
 			m.cancel()
