@@ -11,7 +11,7 @@ import (
 
 type result struct {
 	Client   *clientInfo  `json:"client,omitempty"`
-	Server   string       `json:"server"`
+	Server   string       `json:"server,omitempty"`
 	Ping     pingResult   `json:"ping"`
 	Download *speedResult `json:"download,omitempty"`
 	Upload   *speedResult `json:"upload,omitempty"`
@@ -41,8 +41,11 @@ func runTest(config testConfig, opts options) (result, error) {
 
 	ctx := context.Background()
 	output := result{Server: targetLabel(config.Targets)}
-	if config.Client.Label() != "" {
+	if !opts.noClient && config.Client.Label() != "" {
 		output.Client = &config.Client
+	}
+	if opts.noServer {
+		output.Server = ""
 	}
 	if latency, err := ping(ctx, config.Targets); err == nil {
 		output.Ping.UnloadedMS = roundedLatency(latency)
@@ -118,7 +121,7 @@ func newSpeedResult(transfer transferResult) *speedResult {
 	}
 }
 
-func printResult(w io.Writer, result result) error {
+func printResult(w io.Writer, result result, opts options) error {
 	if _, err := fmt.Fprintf(w, "ping unloaded %s ms  loaded %s ms\n", floatLabel(result.Ping.UnloadedMS), floatLabel(result.Ping.LoadedMS)); err != nil {
 		return err
 	}
@@ -132,13 +135,16 @@ func printResult(w io.Writer, result result) error {
 			return err
 		}
 	}
-	if result.Client != nil {
+	if !opts.noClient && result.Client != nil {
 		if _, err := fmt.Fprintf(w, "client %s\n", result.Client.Label()); err != nil {
 			return err
 		}
 	}
-	_, err := fmt.Fprintf(w, "server %s\n", result.Server)
-	return err
+	if !opts.noServer {
+		_, err := fmt.Fprintf(w, "server %s\n", result.Server)
+		return err
+	}
+	return nil
 }
 
 func speedResultLine(label string, result speedResult) string {
