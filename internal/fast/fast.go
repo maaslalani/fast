@@ -16,6 +16,7 @@ import (
 
 const (
 	downloadPayloadBytes = 25 * 1024 * 1024
+	uploadPayloadBytes   = 25 * 1024 * 1024
 	latencyRequests      = 5
 )
 
@@ -133,6 +134,32 @@ func download(ctx context.Context, url string, total *atomic.Int64) {
 	}
 }
 
+func upload(ctx context.Context, url string, total *atomic.Int64) {
+	url = uploadURL(url)
+
+	for ctx.Err() == nil {
+		body := io.LimitReader(countingReader{reader: zeroReader{}, total: total}, uploadPayloadBytes)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
+		if err != nil {
+			return
+		}
+		req.ContentLength = uploadPayloadBytes
+		req.Header.Set("Content-Type", "application/octet-stream")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			resp.Body.Close()
+			return
+		}
+
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+}
+
 func ping(ctx context.Context, targets []target) (time.Duration, error) {
 	if len(targets) == 0 {
 		return 0, fmt.Errorf("no speed test targets")
@@ -186,6 +213,10 @@ func latencyURL(raw string) string {
 	return rangeURL(raw, 0)
 }
 
+func uploadURL(raw string) string {
+	return rangeURL(raw, uploadPayloadBytes-1)
+}
+
 func rangeURL(raw string, end int) string {
 	u, err := url.Parse(raw)
 	if err != nil || !strings.HasSuffix(u.Path, "/speedtest") {
@@ -235,6 +266,24 @@ type counter struct {
 
 func (c counter) Write(p []byte) (int, error) {
 	c.total.Add(int64(len(p)))
+	return len(p), nil
+}
+
+type countingReader struct {
+	reader io.Reader
+	total  *atomic.Int64
+}
+
+func (r countingReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.total.Add(int64(n))
+	return n, err
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
 	return len(p), nil
 }
 
