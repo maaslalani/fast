@@ -12,12 +12,12 @@ import (
 )
 
 const (
-	// connections is the number of parallel downloads we use to saturate the
+	// defaultConnections is the number of parallel transfers we use to saturate the
 	// connection. fast.com uses up to eight parallel downloads.
-	connections = 8
+	defaultConnections = 8
 
-	// duration is how long we measure the connection speed for.
-	duration = 10 * time.Second
+	// defaultDuration is how long we measure each transfer by default.
+	defaultDuration = 10 * time.Second
 
 	// sparkWidth is the width, in cells, of the speed sparkline.
 	sparkWidth = 20
@@ -67,6 +67,7 @@ type model struct {
 
 	phase      phase
 	phaseStart time.Time
+	duration   time.Duration
 	last       speedSample
 	speed      float64
 	samples    []speedSample
@@ -104,6 +105,7 @@ func newModel(config testConfig, opts options) model {
 		cancel:      cancel,
 		phase:       phaseLatency,
 		phaseStart:  start,
+		duration:    opts.duration,
 		last:        speedSample{time: start},
 		uploadLast:  speedSample{time: start},
 		client:      config.Client.Label(),
@@ -130,7 +132,7 @@ func (m model) measureLoadedLatency() tea.Msg {
 }
 
 func (m model) startDownload() tea.Msg {
-	ctx, cancel := context.WithTimeout(m.ctx, duration)
+	ctx, cancel := context.WithTimeout(m.ctx, m.duration)
 	defer cancel()
 	for _, target := range m.targets {
 		go download(ctx, target.URL, m.bytes)
@@ -140,7 +142,7 @@ func (m model) startDownload() tea.Msg {
 }
 
 func (m model) startUpload() tea.Msg {
-	ctx, cancel := context.WithTimeout(m.ctx, duration)
+	ctx, cancel := context.WithTimeout(m.ctx, m.duration)
 	defer cancel()
 	for _, target := range m.targets {
 		go upload(ctx, target.URL, m.uploadBytes)
@@ -200,7 +202,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.peak = m.speed
 			}
 
-			if now.Sub(m.phaseStart) >= duration {
+			if now.Sub(m.phaseStart) >= m.duration {
 				if !m.up {
 					m.phase = phaseDone
 					m.done = true
@@ -227,7 +229,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.uploadPeak = m.uploadSpeed
 			}
 
-			if now.Sub(m.phaseStart) >= duration {
+			if now.Sub(m.phaseStart) >= m.duration {
 				m.phase = phaseDone
 				m.done = true
 				m.cancel()
