@@ -31,17 +31,23 @@ var (
 	unitStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	sparkStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(accentColor))
 	peakStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	metaStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	baseStyle  = lipgloss.NewStyle().Padding(1, 2)
 )
 
 type tickMsg time.Time
+
+type latencyMsg struct {
+	latency time.Duration
+	err     error
+}
 
 func tickCmd(t time.Time) tea.Msg {
 	return tickMsg(t)
 }
 
 type model struct {
-	targets []string
+	targets []target
 
 	bytes  *atomic.Int64
 	ctx    context.Context
@@ -53,12 +59,14 @@ type model struct {
 	samples []speedSample
 	speeds  []float64
 	peak    float64
+	latency time.Duration
+	server  string
 
 	done     bool
 	quitting bool
 }
 
-func newModel(targets []string) model {
+func newModel(targets []target) model {
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
 	start := time.Now()
 
@@ -69,6 +77,7 @@ func newModel(targets []string) model {
 		cancel:  cancel,
 		start:   start,
 		last:    speedSample{time: start},
+		server:  targetLabel(targets),
 	}
 }
 
@@ -76,12 +85,14 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(tea.Tick(tickInterval, tickCmd), m.measure)
 }
 
-// measure kicks off the parallel downloads that feed our byte counter.
+// measure captures unloaded latency before starting the parallel downloads that
+// feed our byte counter.
 func (m model) measure() tea.Msg {
-	for _, url := range m.targets {
-		go download(m.ctx, url, m.bytes)
+	latency, err := ping(m.ctx, m.targets)
+	for _, target := range m.targets {
+		go download(m.ctx, target.URL, m.bytes)
 	}
-	return nil
+	return latencyMsg{latency: latency, err: err}
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -92,6 +103,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			m.cancel()
 			return m, tea.Quit
+		}
+
+	case latencyMsg:
+		if msg.err == nil {
+			m.latency = msg.latency
 		}
 
 	case tickMsg:
@@ -128,6 +144,13 @@ func (m model) View() string {
 	}
 
 	var s strings.Builder
+	if m.latency > 0 {
+		s.WriteString(metaStyle.Render(fmt.Sprintf("ping %.0f ms", float64(m.latency)/float64(time.Millisecond))))
+	} else {
+		s.WriteString(metaStyle.Render("ping -- ms"))
+	}
+	s.WriteString("\n")
+
 	// Cap each readout at 999.9 and switch to Gbps beyond that, keeping a fixed
 	// width so the unit, sparkline, and peak never shift horizontally.
 	speed, unit := scale(m.speed)
@@ -144,6 +167,9 @@ func (m model) View() string {
 		}
 		s.WriteString(peakStyle.Render(label))
 	}
+
+	s.WriteString("\n")
+	s.WriteString(metaStyle.Render("server " + m.server))
 
 	style := baseStyle
 	if m.done {

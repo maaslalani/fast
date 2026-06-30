@@ -14,7 +14,21 @@ import (
 	"time"
 )
 
-const downloadPayloadBytes = 25 * 1024 * 1024
+const (
+	downloadPayloadBytes = 25 * 1024 * 1024
+	latencyRequests      = 5
+)
+
+type target struct {
+	Name     string   `json:"name"`
+	URL      string   `json:"url"`
+	Location location `json:"location"`
+}
+
+type location struct {
+	City    string `json:"city"`
+	Country string `json:"country"`
+}
 
 var (
 	scriptExpr = regexp.MustCompile(`app-[a-z0-9]+\.js`)
@@ -67,7 +81,7 @@ func fetchToken() (string, error) {
 
 // targets asks fast.com for count URLs to download from. fast.com is powered by
 // Netflix, so these point at the Netflix Open Connect servers nearest to us.
-func targets(count int, token string, preference ipPreference) ([]string, error) {
+func targets(count int, token string, preference ipPreference) ([]target, error) {
 	if token == "" {
 		var err error
 		token, err = fetchToken()
@@ -83,19 +97,13 @@ func targets(count int, token string, preference ipPreference) ([]string, error)
 	}
 
 	var response struct {
-		Targets []struct {
-			URL string `json:"url"`
-		} `json:"targets"`
+		Targets []target `json:"targets"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
 		return nil, err
 	}
 
-	urls := make([]string, len(response.Targets))
-	for i, target := range response.Targets {
-		urls[i] = target.URL
-	}
-	return urls, nil
+	return response.Targets, nil
 }
 
 // download repeatedly downloads from url until the context is cancelled, adding
@@ -125,14 +133,98 @@ func download(ctx context.Context, url string, total *atomic.Int64) {
 	}
 }
 
+func ping(ctx context.Context, targets []target) (time.Duration, error) {
+	if len(targets) == 0 {
+		return 0, fmt.Errorf("no speed test targets")
+	}
+
+	best := time.Duration(1<<63 - 1)
+	var lastErr error
+	for i := 0; i < latencyRequests; i++ {
+		duration, err := pingTarget(ctx, targets[i%len(targets)].URL)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if duration < best {
+			best = duration
+		}
+	}
+	if best == time.Duration(1<<63-1) {
+		return 0, lastErr
+	}
+	return best, nil
+}
+
+func pingTarget(ctx context.Context, url string) (time.Duration, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, latencyURL(url), nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Accept-Encoding", "identity")
+
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("latency request failed: %s", resp.Status)
+	}
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		return 0, err
+	}
+	return time.Since(start), nil
+}
+
 func downloadURL(raw string) string {
+	return rangeURL(raw, downloadPayloadBytes-1)
+}
+
+func latencyURL(raw string) string {
+	return rangeURL(raw, 0)
+}
+
+func rangeURL(raw string, end int) string {
 	u, err := url.Parse(raw)
 	if err != nil || !strings.HasSuffix(u.Path, "/speedtest") {
 		return raw
 	}
 
-	u.Path = strings.TrimSuffix(u.Path, "/speedtest") + fmt.Sprintf("/speedtest/range/0-%d", downloadPayloadBytes-1)
+	u.Path = strings.TrimSuffix(u.Path, "/speedtest") + fmt.Sprintf("/speedtest/range/0-%d", end)
 	return u.String()
+}
+
+func targetLabel(targets []target) string {
+	if len(targets) == 0 {
+		return "unknown"
+	}
+
+	target := targets[0]
+	name := target.Name
+	if name == "" {
+		name = target.URL
+	}
+	if parsed, err := url.Parse(name); err == nil && parsed.Hostname() != "" {
+		name = parsed.Hostname()
+	}
+
+	location := target.Location.String()
+	if location != "" {
+		return fmt.Sprintf("%s (%s)", name, location)
+	}
+	return name
+}
+
+func (l location) String() string {
+	if l.City != "" && l.Country != "" {
+		return l.City + ", " + l.Country
+	}
+	if l.City != "" {
+		return l.City
+	}
+	return l.Country
 }
 
 // counter is an io.Writer that keeps a running total of how many bytes have
