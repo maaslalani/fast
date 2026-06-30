@@ -86,6 +86,8 @@ type model struct {
 	server          string
 	down            bool
 	up              bool
+	noClient        bool
+	noServer        bool
 
 	done     bool
 	quitting bool
@@ -110,6 +112,8 @@ func newModel(config testConfig, opts options) model {
 		server:      targetLabel(config.Targets),
 		down:        opts.down,
 		up:          opts.up,
+		noClient:    opts.noClient,
+		noServer:    opts.noServer,
 	}
 }
 
@@ -263,11 +267,13 @@ func (m model) View() string {
 	}
 
 	s.WriteString("\n")
-	if m.client != "" {
+	if !m.noClient && m.client != "" {
 		s.WriteString(metaStyle.Render("client " + m.client))
 		s.WriteString("\n")
 	}
-	s.WriteString(metaStyle.Render("server " + m.server))
+	if !m.noServer {
+		s.WriteString(metaStyle.Render("server " + m.server))
+	}
 
 	style := baseStyle
 	if m.done {

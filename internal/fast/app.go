@@ -23,6 +23,8 @@ type options struct {
 	up           bool
 	json         bool
 	noTUI        bool
+	noClient     bool
+	noServer     bool
 	duration     time.Duration
 	connections  int
 	version      bool
@@ -54,7 +56,7 @@ func Run(args []string, stdout io.Writer) error {
 		if opts.json {
 			return json.NewEncoder(stdout).Encode(result)
 		}
-		return printResult(stdout, result)
+		return printResult(stdout, result, opts)
 	}
 
 	_, err = tea.NewProgram(newModel(test, opts)).Run()
@@ -121,18 +123,18 @@ func newFlagSet(output io.Writer, opts *options, help *bool, ipv4 *bool, ipv6 *b
 		fmt.Fprintln(output, "  q, esc, ctrl+c    Quit")
 	}
 
-	flags.BoolVar(&opts.down, "d", false, "Measure download speed")
-	flags.BoolVar(&opts.down, "down", false, "Measure download speed")
+	flags.BoolVar(&opts.down, "download", false, "Measure download speed")
 	flags.BoolVar(help, "h", false, "Show help")
 	flags.BoolVar(help, "help", false, "Show help")
-	flags.BoolVar(&opts.up, "u", false, "Measure upload speed")
-	flags.BoolVar(&opts.up, "up", false, "Measure upload speed")
+	flags.BoolVar(&opts.up, "upload", false, "Measure upload speed")
 	flags.IntVar(&opts.connections, "connections", defaultConnections, "Number of parallel `connections`")
 	flags.Var(durationValue{duration: &opts.duration}, "duration", "Measure each transfer for `duration`")
 	flags.BoolVar(ipv4, "ipv4", false, "Prefer IPv4 targets")
 	flags.BoolVar(ipv6, "ipv6", false, "Prefer IPv6 targets")
 	flags.BoolVar(&opts.json, "json", false, "Print results as JSON")
 	flags.BoolVar(&opts.noTUI, "no-tui", false, "Print plain text instead of the terminal UI")
+	flags.BoolVar(&opts.noClient, "no-client", false, "Hide client info from output")
+	flags.BoolVar(&opts.noServer, "no-server", false, "Hide server info from output")
 	flags.StringVar(&opts.token, "token", "", "Use an explicit fast.com API `token`")
 	flags.BoolVar(&opts.version, "version", false, "Show version")
 	return flags
