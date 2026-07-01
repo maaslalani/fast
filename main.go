@@ -127,7 +127,7 @@ func (m Model) View() string {
 	s.WriteString(speedStyle.Render(fmt.Sprintf("%5.1f", speed)))
 	s.WriteString(unitStyle.Render(" " + unit))
 	s.WriteString(" ")
-	s.WriteString(sparkStyle.Render(sparkline(m.speeds, sparkWidth)))
+	s.WriteString(sparkStyle.Render(sparkline(m.speeds, m.peak, sparkWidth)))
 	if m.peak > 0 {
 		peak, peakUnit := scale(m.peak)
 		label := fmt.Sprintf("  peak %.0f", peak)

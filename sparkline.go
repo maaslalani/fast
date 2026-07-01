@@ -15,21 +15,11 @@ var dots = [4][2]byte{
 // sparkline renders values as a single row of braille, width cells wide. Each
 // column is filled from the bottom up to its value, so the series reads like a
 // tiny bar chart that climbs as the speed ramps up.
-func sparkline(values []float64, width int) string {
+func sparkline(values []float64, peak float64, width int) string {
 	cols, rows := width*2, 4
 	cells := make([]byte, width)
 
-	if len(values) > 1 {
-		peak := 0.0
-		for _, v := range values {
-			if v > peak {
-				peak = v
-			}
-		}
-		if peak <= 0 {
-			peak = 1
-		}
-
+	if len(values) > 1 && peak > 0 {
 		for px := range cols {
 			// Resample the series across the full width, interpolating between
 			// samples so the line stays smooth when we only have a few.
