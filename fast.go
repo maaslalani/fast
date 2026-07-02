@@ -105,3 +105,46 @@ func get(url string) ([]byte, error) {
 	defer resp.Body.Close()
 	return io.ReadAll(resp.Body)
 }
+
+const payloadSize = 25 * 1024 * 1024
+
+// upload repeatedly sends POST requests to url until the context is cancelled, adding
+// the number of bytes it writes to total as it goes
+func upload(ctx context.Context, url string, total *atomic.Int64) {
+	for ctx.Err() == nil {
+		body := &uploadReader{remaining: payloadSize, total: total}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
+		if err != nil {
+			return
+		}
+		req.ContentLength = payloadSize
+		req.Header.Set("Content-Type", "application/octet-stream")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+}
+
+// uploadReader streams zeros up to remaining bytes and counts written bytes into total
+type uploadReader struct {
+	remaining int64
+	total     *atomic.Int64
+}
+
+func (u *uploadReader) Read(p []byte) (int, error) {
+	if u.remaining <= 0 {
+		return 0, io.EOF
+	}
+	if int64(len(p)) > u.remaining {
+		p = p[:u.remaining]
+	}
+	clear(p)
+	u.remaining -= int64(len(p))
+	u.total.Add(int64(len(p)))
+	return len(p), nil
+}
+
