@@ -6,11 +6,44 @@ Test your internet speed from the command-line, powered by [fast.com](https://fa
 
 ### Usage
 
-```bash
-fast
+```
+Usage:
+  fast [flags]
+
+Flags:
+  -connections connections
+        Number of parallel connections (default 8)
+  -download
+        Measure download speed
+  -duration duration
+        Measure each transfer for duration (default 10s)
+  -h    Show help
+  -help
+        Show help
+  -ipv4
+        Prefer IPv4 targets
+  -ipv6
+        Prefer IPv6 targets
+  -json
+        Print results as JSON
+  -no-client
+        Hide client info from output
+  -no-server
+        Hide server info from output
+  -no-tui
+        Print plain text instead of the terminal UI
+  -token token
+        Use an explicit fast.com API token
+  -upload
+        Measure upload speed
+  -version
+        Show version
+
+Keyboard:
+  q, esc, ctrl+c    Quit
 ```
 
-`fast` measures your download speed against the nearest Netflix Open Connect
+`fast` measures your upload and download speed against the nearest Netflix Open Connect
 servers and reports it in megabits per second, right inline in your terminal.
 
 ### Installation
