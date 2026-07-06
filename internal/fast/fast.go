@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -178,22 +179,34 @@ func ping(ctx context.Context, targets []target) (time.Duration, error) {
 		return 0, fmt.Errorf("no speed test targets")
 	}
 
-	best := time.Duration(1<<63 - 1)
 	var lastErr error
-	for i := 0; i < latencyRequests; i++ {
-		duration, err := pingTarget(ctx, targets[i%len(targets)].URL)
-		if err != nil {
+	for _, target := range targets {
+		if _, err := pingTarget(ctx, target.URL); err != nil {
 			lastErr = err
 			continue
 		}
-		if duration < best {
-			best = duration
+
+		samples := make([]time.Duration, 0, latencyRequests)
+		for i := 0; i < latencyRequests; i++ {
+			duration, err := pingTarget(ctx, target.URL)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			samples = append(samples, duration)
+		}
+		if len(samples) > 0 {
+			return medianDuration(samples), nil
 		}
 	}
-	if best == time.Duration(1<<63-1) {
-		return 0, lastErr
-	}
-	return best, nil
+	return 0, lastErr
+}
+
+func medianDuration(samples []time.Duration) time.Duration {
+	sort.Slice(samples, func(i, j int) bool {
+		return samples[i] < samples[j]
+	})
+	return samples[len(samples)/2]
 }
 
 func pingTarget(ctx context.Context, url string) (time.Duration, error) {
