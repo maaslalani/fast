@@ -25,6 +25,10 @@ const (
 
 	// sparkWidth is the width, in cells, of the speed sparkline.
 	sparkWidth = 20
+
+	// latencyTimeout bounds the ping measurement so a stalled probe can't hang
+	// the program before the TUI even starts.
+	latencyTimeout = 5 * time.Second
 )
 
 const accentColor = "#2EF8BB"
@@ -47,6 +51,7 @@ func tickCmd(t time.Time) tea.Msg {
 
 type Model struct {
 	targets []string
+	ping    time.Duration
 
 	bytes  *atomic.Int64
 	ctx    context.Context
@@ -61,11 +66,12 @@ type Model struct {
 	quitting bool
 }
 
-func NewModel(targets []string) Model {
+func NewModel(targets []string, ping time.Duration) Model {
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
 
 	return Model{
 		targets: targets,
+		ping:    ping,
 		bytes:   &atomic.Int64{},
 		ctx:     ctx,
 		cancel:  cancel,
@@ -137,6 +143,9 @@ func (m Model) View() string {
 		}
 		s.WriteString(peakStyle.Render(label))
 	}
+	if m.ping > 0 {
+		s.WriteString(unitStyle.Render(fmt.Sprintf("  ping %dms", m.ping.Milliseconds())))
+	}
 
 	style := baseStyle
 	if m.done {
@@ -174,7 +183,16 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if _, err := tea.NewProgram(NewModel(urls)).Run(); err != nil {
+	// Ping is a nice-to-have alongside the download number, so a slow or
+	// failed probe shouldn't block or kill the whole test.
+	var ping time.Duration
+	if len(urls) > 0 {
+		latencyCtx, latencyCancel := context.WithTimeout(context.Background(), latencyTimeout)
+		ping, _ = latency(latencyCtx, urls[0])
+		latencyCancel()
+	}
+
+	if _, err := tea.NewProgram(NewModel(urls, ping)).Run(); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -7,12 +7,18 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"sync/atomic"
+	"time"
 )
 
 // fallbackToken is used when we can't extract a fresh token from the fast.com
 // JavaScript bundle. It rarely changes, so this is usually good enough.
 const fallbackToken = "YXNkZmFzZGxmbnNkYWZoYXNkZmhrYWxm"
+
+// latencySamples is how many timed round trips we average to estimate
+// latency, after a warm-up request that we discard.
+const latencySamples = 5
 
 var (
 	scriptExpr = regexp.MustCompile(`app-[a-z0-9]+\.js`)
@@ -63,6 +69,55 @@ func targets(count int) ([]string, error) {
 		urls[i] = target.URL
 	}
 	return urls, nil
+}
+
+// latency estimates the round-trip time to url by requesting a single byte
+// repeatedly, returning the median of however many of latencySamples timed
+// requests succeed. A first, untimed request warms up the connection so its
+// setup cost doesn't skew the result. Sampling the same target repeatedly,
+// rather than round-robining across targets, keeps the connection warm so
+// each timed sample measures round-trip time rather than a fresh TCP/TLS
+// handshake.
+func latency(ctx context.Context, url string) (time.Duration, error) {
+	probe := func() (time.Duration, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return 0, err
+		}
+		req.Header.Set("Range", "bytes=0-0")
+
+		start := time.Now()
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return 0, err
+		}
+		defer resp.Body.Close()
+		// A server is free to ignore an unsupported Range header (RFC 7233 §3.1)
+		// and return the full body instead of a single byte, so make sure we
+		// actually got the partial response we asked for before timing it.
+		if resp.StatusCode != http.StatusPartialContent {
+			return 0, fmt.Errorf("unexpected status %s", resp.Status)
+		}
+		io.Copy(io.Discard, resp.Body)
+		return time.Since(start), nil
+	}
+
+	if _, err := probe(); err != nil {
+		return 0, err
+	}
+
+	var samples []time.Duration
+	for range latencySamples {
+		if d, err := probe(); err == nil {
+			samples = append(samples, d)
+		}
+	}
+	if len(samples) == 0 {
+		return 0, fmt.Errorf("latency: no successful samples")
+	}
+
+	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
+	return samples[len(samples)/2], nil
 }
 
 // download repeatedly downloads from url until the context is cancelled, adding

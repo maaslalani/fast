@@ -11,7 +11,8 @@ fast
 ```
 
 `fast` measures your download speed against the nearest Netflix Open Connect
-servers and reports it in megabits per second, right inline in your terminal.
+servers and reports it in megabits per second, right inline in your terminal,
+along with your ping to that server.
 
 ### Installation
 
