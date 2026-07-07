@@ -12,7 +12,7 @@ Set Shell bash
 Set FontFamily "JetBrains Mono"
 Set FontSize 96
 Set Width 3300
-Set Height 880
+Set Height 1080
 Set Padding 120
 Set TypingSpeed 100ms
 
@@ -30,4 +30,4 @@ Sleep 750ms
 Enter
 
 # Let the 10s speed test run and settle on its final reading
-Sleep 10s
+Sleep 25s
