@@ -184,6 +184,24 @@ func upload(ctx context.Context, url string, total *atomic.Int64) {
 	}
 }
 
+// warm opens a keep-alive connection to url and hands it back to the idle pool
+// by draining a single-byte ranged GET, so a later request to the same host can
+// reuse it instead of paying for a fresh TCP and TLS handshake.
+func warm(ctx context.Context, url string) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Range", "bytes=0-0")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+}
+
 // uploadReader streams zeros up to remaining bytes and counts written bytes into total
 type uploadReader struct {
 	remaining int64

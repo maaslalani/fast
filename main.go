@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -29,6 +30,11 @@ const (
 	// latencyTimeout bounds the latency probe so a stalled request can't hang
 	// the test indefinitely.
 	latencyTimeout = 5 * time.Second
+
+	// warmupLead is how long before the download ends we open the upload
+	// connections, so switching to the upload phase doesn't stall on a fresh
+	// handshake.
+	warmupLead = 2 * time.Second
 )
 
 const (
@@ -61,6 +67,7 @@ func tickCmd(t time.Time) tea.Msg {
 
 type Model struct {
 	targets []string
+	err     error
 
 	ping     time.Duration
 	pingDone bool
@@ -81,21 +88,34 @@ type Model struct {
 	ulSpeed  float64
 	ulSpeeds []float64
 	ulPeak   float64
+	ulWarmed bool
 	ulDone   bool
 
 	quitting bool
 }
 
-func NewModel(targets []string) Model {
+func NewModel() Model {
 	return Model{
-		targets: targets,
 		dlBytes: &atomic.Int64{},
 		ulBytes: &atomic.Int64{},
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Tick(tickInterval, tickCmd)
+	return tea.Batch(tea.Tick(tickInterval, tickCmd), m.fetchTargets)
+}
+
+// targetsMsg carries the speed-test targets fetched from fast.com at launch.
+type targetsMsg struct {
+	urls []string
+	err  error
+}
+
+// fetchTargets asks fast.com for the nearest targets in the background, so the
+// UI renders immediately instead of blocking the launch on the network.
+func (m Model) fetchTargets() tea.Msg {
+	urls, err := targets(connections)
+	return targetsMsg{urls: urls, err: err}
 }
 
 // measureDownload kicks off the parallel downloads that feed our byte counter
@@ -111,6 +131,24 @@ func (m Model) measureUpload() tea.Msg {
 	for _, url := range m.targets {
 		go upload(m.ulCtx, url, m.ulBytes)
 	}
+	return nil
+}
+
+// warmUpload opens the upload connections while the download is still running,
+// so switching to the upload phase reuses them instead of stalling on a fresh
+// TCP and TLS handshake, which otherwise reads as a lag when the upload begins.
+func (m Model) warmUpload() tea.Msg {
+	ctx, cancel := context.WithTimeout(context.Background(), latencyTimeout)
+	defer cancel()
+	var wg sync.WaitGroup
+	for _, url := range m.targets {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			warm(ctx, url)
+		}()
+	}
+	wg.Wait()
 	return nil
 }
 
@@ -147,6 +185,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
+	case targetsMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			m.quitting = true
+			return m, tea.Quit
+		}
+		m.targets = msg.urls
+		return m, nil
+
 	case pingMsg:
 		m.pingDone = true
 		if msg.err == nil {
@@ -155,8 +202,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tickMsg:
+		if m.targets == nil {
+			// Targets aren't ready yet; keep ticking so the first frame renders
+			// immediately instead of blocking the launch on the network.
+			return m, tea.Tick(tickInterval, tickCmd)
+		}
 		if m.dlCtx == nil {
-			// First tick: kick off the download that feeds the byte counter.
+			// First tick after the targets arrive: kick off the download that
+			// feeds the byte counter.
 			m.dlStart = time.Now()
 			m.dlCtx, m.dlCancel = context.WithTimeout(context.Background(), duration)
 			return m, tea.Batch(tea.Tick(tickInterval, tickCmd), m.measureDownload)
@@ -166,6 +219,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.dlSpeeds = append(m.dlSpeeds, m.dlSpeed)
 			if m.dlSpeed > m.dlPeak {
 				m.dlPeak = m.dlSpeed
+			}
+
+			// Open the upload connections a little before the download ends so
+			// switching to the upload phase doesn't stall on a fresh handshake.
+			if !m.ulWarmed && elapsed >= duration-warmupLead {
+				m.ulWarmed = true
+				return m, tea.Batch(tea.Tick(tickInterval, tickCmd), m.warmUpload)
 			}
 
 			if elapsed >= duration {
@@ -292,17 +352,19 @@ func scale(speed float64) (float64, string) {
 }
 
 func main() {
-	urls, err := targets(connections)
+	final, err := tea.NewProgram(NewModel()).Run()
 	if err != nil {
-		var netErr net.Error
-		if errors.As(err, &netErr) {
-			fmt.Fprintln(os.Stderr, "No internet connection.")
-			os.Exit(1)
-		}
 		log.Fatal(err)
 	}
 
-	if _, err := tea.NewProgram(NewModel(urls)).Run(); err != nil {
-		log.Fatal(err)
+	// The target fetch runs in the background, so report its failure once the
+	// program has exited and the terminal is restored.
+	if m, ok := final.(Model); ok && m.err != nil {
+		var netErr net.Error
+		if errors.As(m.err, &netErr) {
+			fmt.Fprintln(os.Stderr, "No internet connection.")
+			os.Exit(1)
+		}
+		log.Fatal(m.err)
 	}
 }
