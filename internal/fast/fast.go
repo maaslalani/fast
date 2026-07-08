@@ -24,22 +24,30 @@ const latencySamples = 5
 var (
 	scriptExpr = regexp.MustCompile(`app-[a-z0-9]+\.js`)
 	tokenExpr  = regexp.MustCompile(`token:"(\w+)"`)
-	ipv4Client = &http.Client{Transport: ipv4Transport()}
+	ipv4Client = &http.Client{Transport: ipTransport("tcp4")}
+	ipv6Client = &http.Client{Transport: ipTransport("tcp6")}
 )
 
-func ipv4Transport() *http.Transport {
+type ipPreference int
+
+const (
+	preferIPv4 ipPreference = iota
+	preferIPv6
+)
+
+func ipTransport(family string) *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		return dialer.DialContext(ctx, "tcp4", address)
+		return dialer.DialContext(ctx, family, address)
 	}
 	return transport
 }
 
-// token extracts the API token from the fast.com JavaScript bundle. fast.com
+// fetchToken extracts the API token from the fast.com JavaScript bundle. fast.com
 // embeds it in a script tag, so we fetch the page, find the script and pull the
 // token out of it.
-func token() (string, error) {
+func fetchToken() (string, error) {
 	page, err := get("https://fast.com/")
 	if err != nil {
 		return "", err
@@ -64,17 +72,17 @@ func token() (string, error) {
 
 // targets asks fast.com for count URLs to download from. fast.com is powered by
 // Netflix, so these point at the Netflix Open Connect servers nearest to us.
-func targets(count int) ([]string, error) {
-	token, err := token()
-	if err != nil {
-		return nil, err
+func targets(count int, token string, preference ipPreference) ([]string, error) {
+	if token == "" {
+		var err error
+		token, err = fetchToken()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	url := fmt.Sprintf("https://api.fast.com/netflix/speedtest/v2?https=true&token=%s&urlCount=%d", token, count)
-	body, err := getIPv4(url)
-	if err != nil {
-		body, err = get(url)
-	}
+	body, err := getPreferred(url, preference)
 	if err != nil {
 		return nil, err
 	}
@@ -199,6 +207,24 @@ func get(url string) ([]byte, error) {
 
 func getIPv4(url string) ([]byte, error) {
 	return getWithClient(ipv4Client, url)
+}
+
+func getIPv6(url string) ([]byte, error) {
+	return getWithClient(ipv6Client, url)
+}
+
+func getPreferred(url string, preference ipPreference) ([]byte, error) {
+	var body []byte
+	var err error
+	if preference == preferIPv6 {
+		body, err = getIPv6(url)
+	} else {
+		body, err = getIPv4(url)
+	}
+	if err != nil {
+		body, err = get(url)
+	}
+	return body, err
 }
 
 func getWithClient(client *http.Client, url string) ([]byte, error) {
