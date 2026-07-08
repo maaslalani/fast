@@ -15,6 +15,8 @@ type options struct {
 	ipSet        bool
 	client       bool
 	server       bool
+	down         bool
+	up           bool
 }
 
 func Run(args []string, stdout io.Writer) error {
@@ -60,6 +62,10 @@ func parseArgs(args []string) (options, bool, error) {
 		opts.ipPreference = preferIPv6
 		opts.ipSet = true
 	}
+	if !opts.down && !opts.up {
+		opts.down = true
+		opts.up = true
+	}
 	return opts, false, nil
 }
 
@@ -80,8 +86,10 @@ func newFlagSet(output io.Writer, opts *options, help *bool, ipv4 *bool, ipv6 *b
 	}
 
 	flags.BoolVar(&opts.client, "client", false, "Show client info")
+	flags.BoolVar(&opts.down, "download", false, "Measure download speed")
 	flags.BoolVar(help, "h", false, "Show help")
 	flags.BoolVar(help, "help", false, "Show help")
+	flags.BoolVar(&opts.up, "upload", false, "Measure upload speed")
 	flags.BoolVar(ipv4, "ipv4", false, "Prefer IPv4 targets")
 	flags.BoolVar(ipv6, "ipv6", false, "Prefer IPv6 targets")
 	flags.BoolVar(&opts.server, "server", false, "Show server info")

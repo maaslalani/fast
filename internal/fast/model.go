@@ -82,6 +82,8 @@ type model struct {
 	server     string
 	showClient bool
 	showServer bool
+	down       bool
+	up         bool
 
 	done     bool
 	quitting bool
@@ -105,6 +107,8 @@ func newModel(config testConfig, opts options) model {
 		server:      targetLabel(config.Targets),
 		showClient:  opts.client,
 		showServer:  opts.server,
+		down:        opts.down,
+		up:          opts.up,
 	}
 }
 
@@ -152,10 +156,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.latency = msg.latency
 		}
 		now := time.Now()
-		m.phase = phaseDownload
+		if m.down {
+			m.phase = phaseDownload
+			m.phaseStart = now
+			m.last = speedSample{time: now}
+			return m, m.startDownload
+		}
+		m.phase = phaseUpload
 		m.phaseStart = now
-		m.last = speedSample{time: now}
-		return m, m.startDownload
+		m.uploadLast = speedSample{time: now}
+		return m, m.startUpload
 
 	case tickMsg:
 		now := time.Now()
@@ -178,6 +188,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if now.Sub(m.phaseStart) >= duration {
+				if !m.up {
+					m.phase = phaseDone
+					m.done = true
+					m.cancel()
+					return m, tea.Quit
+				}
 				m.phase = phaseUpload
 				m.phaseStart = now
 				m.uploadLast = speedSample{time: now}
@@ -225,9 +241,15 @@ func (m model) View() string {
 	}
 	s.WriteString("\n")
 
-	s.WriteString(speedLine("down", m.speed, m.speeds, m.peak, true))
-	s.WriteString("\n")
-	s.WriteString(speedLine("up", m.uploadSpeed, m.uploadSpeeds, m.uploadPeak, m.phase == phaseUpload || m.phase == phaseDone))
+	if m.down {
+		s.WriteString(speedLine("down", m.speed, m.speeds, m.peak, true))
+	}
+	if m.down && m.up {
+		s.WriteString("\n")
+	}
+	if m.up {
+		s.WriteString(speedLine("up", m.uploadSpeed, m.uploadSpeeds, m.uploadPeak, m.phase == phaseUpload || m.phase == phaseDone))
+	}
 
 	if (m.showClient && m.client != "") || (m.showServer && m.server != "") {
 		s.WriteString("\n")
