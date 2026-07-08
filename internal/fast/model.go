@@ -42,6 +42,8 @@ type latencyMsg struct {
 	err     error
 }
 
+type loadedLatencyMsg latencyMsg
+
 type phase int
 
 const (
@@ -77,13 +79,14 @@ type model struct {
 	uploadSpeeds  []float64
 	uploadPeak    float64
 
-	latency    time.Duration
-	client     string
-	server     string
-	showClient bool
-	showServer bool
-	down       bool
-	up         bool
+	unloadedLatency time.Duration
+	loadedLatency   time.Duration
+	client          string
+	server          string
+	showClient      bool
+	showServer      bool
+	down            bool
+	up              bool
 
 	done     bool
 	quitting bool
@@ -121,6 +124,11 @@ func (m model) measureLatency() tea.Msg {
 	return latencyMsg{latency: latency, err: err}
 }
 
+func (m model) measureLoadedLatency() tea.Msg {
+	latency, err := ping(m.ctx, m.targets)
+	return loadedLatencyMsg{latency: latency, err: err}
+}
+
 func (m model) startDownload() tea.Msg {
 	ctx, cancel := context.WithTimeout(m.ctx, duration)
 	defer cancel()
@@ -153,19 +161,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case latencyMsg:
 		if msg.err == nil {
-			m.latency = msg.latency
+			m.unloadedLatency = msg.latency
 		}
 		now := time.Now()
 		if m.down {
 			m.phase = phaseDownload
 			m.phaseStart = now
 			m.last = speedSample{time: now}
-			return m, m.startDownload
+			return m, tea.Batch(m.startDownload, m.measureLoadedLatency)
 		}
 		m.phase = phaseUpload
 		m.phaseStart = now
 		m.uploadLast = speedSample{time: now}
-		return m, m.startUpload
+		return m, tea.Batch(m.startUpload, m.measureLoadedLatency)
+
+	case loadedLatencyMsg:
+		if msg.err == nil && msg.latency > m.loadedLatency {
+			m.loadedLatency = msg.latency
+		}
 
 	case tickMsg:
 		now := time.Now()
@@ -197,7 +210,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.phase = phaseUpload
 				m.phaseStart = now
 				m.uploadLast = speedSample{time: now}
-				return m, tea.Batch(m.startUpload, tea.Tick(tickInterval, tickCmd))
+				return m, tea.Batch(m.startUpload, m.measureLoadedLatency, tea.Tick(tickInterval, tickCmd))
 			}
 
 		case phaseUpload:
@@ -234,11 +247,11 @@ func (m model) View() string {
 	}
 
 	var s strings.Builder
-	if m.latency > 0 {
-		s.WriteString(metaStyle.Render(fmt.Sprintf("ping %.0f ms", float64(m.latency)/float64(time.Millisecond))))
-	} else {
-		s.WriteString(metaStyle.Render("ping -- ms"))
-	}
+	s.WriteString(metaStyle.Render(fmt.Sprintf(
+		"ping unloaded %s ms  loaded %s ms",
+		latencyLabel(m.unloadedLatency),
+		latencyLabel(m.loadedLatency),
+	)))
 	s.WriteString("\n")
 
 	if m.down {
@@ -266,6 +279,13 @@ func (m model) View() string {
 		style = style.PaddingBottom(2)
 	}
 	return style.Render(s.String())
+}
+
+func latencyLabel(latency time.Duration) string {
+	if latency <= 0 {
+		return "--"
+	}
+	return fmt.Sprintf("%.0f", float64(latency)/float64(time.Millisecond))
 }
 
 func speedLine(label string, speed float64, values []float64, peak float64, show bool) string {
