@@ -2,7 +2,7 @@
 
 Test your internet speed from the command-line, powered by [fast.com](https://fast.com).
 
-<img src="demo.gif" width="600" alt="fast running a speed test in the terminal" />
+<img src="vhs/demo.gif" width="600" alt="fast running a speed test in the terminal" />
 
 ### Usage
 
