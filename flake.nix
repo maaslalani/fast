@@ -1,5 +1,5 @@
 {
-  description = "Fast - a fast, minimal file manager with inline previews";
+  description = "Fast - Internet speed test in your terminal"; 
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -21,7 +21,7 @@
         packages = {
           default = pkgs.buildGoModule {
             pname = "fast";
-            version = "0.0.0";
+            version = "0.1.0";
             src = ./.;
             vendorHash = null;
           };
