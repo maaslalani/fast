@@ -15,8 +15,6 @@ jobs:
         include:
           - system: x86_64-linux
             runner: ubuntu-24.04
-          - system: x86_64-darwin
-            runner: macos-13
           - system: aarch64-darwin
             runner: macos-14
 
