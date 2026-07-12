@@ -1,5 +1,5 @@
 {
-  description = "Fast - Internet speed test in your terminal"; 
+  description = "Internet speed test in your terminal"; 
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -23,7 +23,7 @@
             pname = "fast";
             version = "0.1.0";
             src = ./.;
-            vendorHash = null;
+            vendorHash = "sha256-YSjJ8NOL97hXZLnfGYIjoKmARv+gWOsv+5qkl9konnA=";
           };
         };
 
