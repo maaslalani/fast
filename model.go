@@ -53,7 +53,7 @@ func newMeasurement() measurement {
 	return measurement{bytes: &atomic.Int64{}}
 }
 
-func (m *measurement) start(now time.Time, duration time.Duration) {
+func (m *measurement) start(ctx context.Context, now time.Time, duration time.Duration) {
 	m.stop()
 	m.bytes.Store(0)
 	m.started = now
@@ -61,7 +61,7 @@ func (m *measurement) start(now time.Time, duration time.Duration) {
 	m.speed = 0
 	m.samples = make([]float64, 0, int(duration/tickInterval)+1)
 	m.peak = 0
-	m.ctx, m.cancel = context.WithDeadline(context.Background(), now.Add(duration))
+	m.ctx, m.cancel = context.WithDeadline(ctx, now.Add(duration))
 }
 
 func (m *measurement) sample(now time.Time) time.Duration {
@@ -80,7 +80,33 @@ func (m *measurement) stop() {
 	}
 }
 
+type transferFunc func(context.Context, string, *atomic.Int64)
+
+type dependencies struct {
+	targets  func(context.Context, int) ([]string, error)
+	download transferFunc
+	upload   transferFunc
+	warm     func(context.Context, string)
+	latency  func(context.Context, string) (time.Duration, error)
+}
+
+func defaultDependencies() dependencies {
+	service := newFastService()
+	return dependencies{
+		targets:  service.targets,
+		download: service.download,
+		upload:   service.upload,
+		warm:     service.warm,
+		latency:  service.latency,
+	}
+}
+
 type Model struct {
+	deps   dependencies
+	ctx    context.Context
+	cancel context.CancelFunc
+	now    func() time.Time
+
 	targets []string
 	err     error
 	phase   phase
@@ -94,10 +120,28 @@ type Model struct {
 }
 
 func NewModel() Model {
+	return newModel(defaultDependencies())
+}
+
+func newModel(deps dependencies) Model {
+	ctx, cancel := context.WithCancel(context.Background())
 	return Model{
+		deps:     deps,
+		ctx:      ctx,
+		cancel:   cancel,
+		now:      time.Now,
 		phase:    phaseLoading,
 		download: newMeasurement(),
 		upload:   newMeasurement(),
+	}
+}
+
+func (m *Model) stop() {
+	m.download.stop()
+	m.upload.stop()
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
 	}
 }
 
@@ -111,38 +155,44 @@ type targetsMsg struct {
 }
 
 func (m Model) fetchTargets() tea.Msg {
-	urls, err := targets(connections)
+	ctx, cancel := context.WithTimeout(m.ctx, metadataTimeout)
+	defer cancel()
+	urls, err := m.deps.targets(ctx, connections)
 	return targetsMsg{urls: urls, err: err}
 }
 
-type transferFunc func(context.Context, string, *atomic.Int64)
-
 func startTransfers(ctx context.Context, targets []string, total *atomic.Int64, transfer transferFunc) tea.Msg {
+	var wg sync.WaitGroup
 	for _, target := range targets {
-		go transfer(ctx, target, total)
+		wg.Add(1)
+		go func(target string) {
+			defer wg.Done()
+			transfer(ctx, target, total)
+		}(target)
 	}
+	wg.Wait()
 	return nil
 }
 
 func (m Model) measureDownload() tea.Msg {
-	return startTransfers(m.download.ctx, m.targets, m.download.bytes, download)
+	return startTransfers(m.download.ctx, m.targets, m.download.bytes, m.deps.download)
 }
 
 func (m Model) measureUpload() tea.Msg {
-	return startTransfers(m.upload.ctx, m.targets, m.upload.bytes, upload)
+	return startTransfers(m.upload.ctx, m.targets, m.upload.bytes, m.deps.upload)
 }
 
 func (m Model) warmUpload() tea.Msg {
-	ctx, cancel := context.WithDeadline(context.Background(), m.download.started.Add(duration))
+	ctx, cancel := context.WithDeadline(m.ctx, m.download.started.Add(duration))
 	defer cancel()
 
 	var wg sync.WaitGroup
 	for _, target := range m.targets {
 		wg.Add(1)
-		go func() {
+		go func(target string) {
 			defer wg.Done()
-			warm(ctx, target)
-		}()
+			m.deps.warm(ctx, target)
+		}(target)
 	}
 	wg.Wait()
 	return nil
@@ -157,9 +207,9 @@ func (m Model) measurePing() tea.Msg {
 	if len(m.targets) == 0 {
 		return pingMsg{err: errors.New("no targets")}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), latencyTimeout)
+	ctx, cancel := context.WithTimeout(m.ctx, latencyTimeout)
 	defer cancel()
-	d, err := latency(ctx, m.targets[0])
+	d, err := m.deps.latency(ctx, m.targets[0])
 	return pingMsg{duration: d, err: err}
 }
 
@@ -169,8 +219,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
 			m.quitting = true
-			m.download.stop()
-			m.upload.stop()
+			m.stop()
 			return m, tea.Quit
 		}
 
@@ -178,17 +227,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.err = msg.err
 			m.quitting = true
+			m.stop()
 			return m, tea.Quit
 		}
 		if len(msg.urls) == 0 {
 			m.err = errors.New("no targets")
 			m.quitting = true
+			m.stop()
 			return m, tea.Quit
 		}
 
 		m.targets = msg.urls
 		m.phase = phaseDownloading
-		m.download.start(time.Now(), duration)
+		m.download.start(m.ctx, m.now(), duration)
 		return m, tea.Batch(nextTick(), m.measureDownload)
 
 	case pingMsg:
@@ -196,10 +247,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ping = msg.duration
 		}
 		m.phase = phaseDone
+		m.stop()
 		return m, tea.Quit
 
 	case tickMsg:
-		return m.updateTick(time.Now())
+		return m.updateTick(time.Time(msg))
 	}
 
 	return m, nil
@@ -212,7 +264,7 @@ func (m Model) updateTick(now time.Time) (tea.Model, tea.Cmd) {
 		if elapsed >= duration {
 			m.download.stop()
 			m.phase = phaseUploading
-			m.upload.start(now, duration)
+			m.upload.start(m.ctx, now, duration)
 			return m, tea.Batch(nextTick(), m.measureUpload)
 		}
 		if !m.uploadWarmed && elapsed >= duration-warmupLead {

@@ -34,7 +34,8 @@ func sparkline(values []float64, peak float64, width int) string {
 				v += (values[i+1] - values[i]) * (pos - float64(i))
 			}
 
-			height := int(v/peak*float64(rows) + 0.5)
+			ratio := min(max(v/peak, 0), 1)
+			height := int(ratio*float64(rows) + 0.5)
 			for y := rows - height; y < rows; y++ {
 				cells[px/2] |= dots[y][px%2]
 			}

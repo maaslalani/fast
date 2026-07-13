@@ -22,31 +22,30 @@ const (
 var (
 	scriptExpr = regexp.MustCompile(`app-[a-z0-9]+\.js`)
 	tokenExpr  = regexp.MustCompile(`token:"([^"]+)"`)
-
-	httpClient = newHTTPClient()
-	fastAPI    = fastService{
-		client:  httpClient,
-		siteURL: "https://fast.com/",
-		apiURL:  "https://api.fast.com/netflix/speedtest/v2",
-	}
 )
 
+type httpDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
 type fastService struct {
-	client  *http.Client
+	client  httpDoer
 	siteURL string
 	apiURL  string
 }
 
-func newHTTPClient() *http.Client {
+func newFastService() fastService {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConnsPerHost = connections
-	return &http.Client{Transport: transport}
+	return fastService{
+		client:  &http.Client{Transport: transport},
+		siteURL: "https://fast.com/",
+		apiURL:  "https://api.fast.com/netflix/speedtest/v2",
+	}
 }
 
-func targets(count int) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), metadataTimeout)
-	defer cancel()
-	return fastAPI.targets(ctx, count)
+func isHTTPSuccess(statusCode int) bool {
+	return statusCode >= http.StatusOK && statusCode < http.StatusMultipleChoices
 }
 
 func (s fastService) targets(ctx context.Context, count int) ([]string, error) {
@@ -155,7 +154,7 @@ func (s fastService) get(ctx context.Context, requestURL string) ([]byte, error)
 	if len(body) > maxMetadataBytes {
 		return nil, fmt.Errorf("response from %s exceeds %d bytes", requestURL, maxMetadataBytes)
 	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+	if !isHTTPSuccess(resp.StatusCode) {
 		return nil, &statusError{code: resp.StatusCode, status: resp.Status}
 	}
 	return body, nil

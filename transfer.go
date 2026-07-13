@@ -16,7 +16,7 @@ const (
 	transferBufferSize = 64 * 1024
 )
 
-func latency(ctx context.Context, url string) (time.Duration, error) {
+func (s fastService) latency(ctx context.Context, url string) (time.Duration, error) {
 	probe := func() (time.Duration, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
@@ -25,7 +25,7 @@ func latency(ctx context.Context, url string) (time.Duration, error) {
 		req.Header.Set("Range", "bytes=0-0")
 
 		start := time.Now()
-		resp, err := httpClient.Do(req)
+		resp, err := s.client.Do(req)
 		if err != nil {
 			return 0, err
 		}
@@ -57,7 +57,7 @@ func latency(ctx context.Context, url string) (time.Duration, error) {
 	return samples[len(samples)/2], nil
 }
 
-func download(ctx context.Context, url string, total *atomic.Int64) {
+func (s fastService) download(ctx context.Context, url string, total *atomic.Int64) {
 	buffer := make([]byte, transferBufferSize)
 	for ctx.Err() == nil {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -66,11 +66,11 @@ func download(ctx context.Context, url string, total *atomic.Int64) {
 		}
 		req.Header.Set("Accept-Encoding", "identity")
 
-		resp, err := httpClient.Do(req)
+		resp, err := s.client.Do(req)
 		if err != nil {
 			return
 		}
-		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		if !isHTTPSuccess(resp.StatusCode) {
 			resp.Body.Close()
 			return
 		}
@@ -92,7 +92,7 @@ func (c counter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func upload(ctx context.Context, url string, total *atomic.Int64) {
+func (s fastService) upload(ctx context.Context, url string, total *atomic.Int64) {
 	for ctx.Err() == nil {
 		body := &uploadReader{remaining: payloadSize, total: total}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
@@ -102,7 +102,7 @@ func upload(ctx context.Context, url string, total *atomic.Int64) {
 		req.ContentLength = payloadSize
 		req.Header.Set("Content-Type", "application/octet-stream")
 
-		resp, err := httpClient.Do(req)
+		resp, err := s.client.Do(req)
 		if err != nil {
 			return
 		}
@@ -111,20 +111,20 @@ func upload(ctx context.Context, url string, total *atomic.Int64) {
 		if ctx.Err() != nil || copyErr != nil || closeErr != nil {
 			return
 		}
-		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		if !isHTTPSuccess(resp.StatusCode) {
 			return
 		}
 	}
 }
 
-func warm(ctx context.Context, url string) {
+func (s fastService) warm(ctx context.Context, url string) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return
 	}
 	req.Header.Set("Range", "bytes=0-0")
 
-	resp, err := httpClient.Do(req)
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return
 	}
