@@ -10,7 +10,14 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+var version = "dev"
+
 func main() {
+	if len(os.Args) > 1 && isVersionArg(os.Args[1]) {
+		fmt.Println(version)
+		return
+	}
+
 	final, err := tea.NewProgram(NewModel()).Run()
 	if err != nil {
 		log.Fatal(err)
@@ -24,4 +31,8 @@ func main() {
 		}
 		log.Fatal(m.err)
 	}
+}
+
+func isVersionArg(arg string) bool {
+	return arg == "--version" || arg == "-v"
 }
