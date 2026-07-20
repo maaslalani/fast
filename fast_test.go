@@ -2,13 +2,43 @@ package main
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 )
+
+func TestVersionFlags(t *testing.T) {
+	oldArgs, oldStdout, oldVersion := os.Args, os.Stdout, version
+	defer func() {
+		os.Args, os.Stdout, version = oldArgs, oldStdout, oldVersion
+	}()
+	version = "1.2.3"
+
+	for _, flag := range []string{"--version", "-v"} {
+		t.Run(flag, func(t *testing.T) {
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			os.Args, os.Stdout = []string{"fast", flag}, w
+			main()
+			w.Close()
+			output, err := io.ReadAll(r)
+			r.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := string(output), "1.2.3\n"; got != want {
+				t.Errorf("output = %q, want %q", got, want)
+			}
+		})
+	}
+}
 
 func TestTargetsUsesFallbackTokenFirst(t *testing.T) {
 	var apiRequests atomic.Int64
